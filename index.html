@@ -1283,7 +1283,7 @@ function renderAdminTopics(){
       const qcount=getQs().filter(q=>q.topicId===t.id).length;
       return `<tr>
         <td style="font-size:20px">${t.emoji}</td>
-        <td><strong>${t.name}</strong><br>${assignLabel(t)}</td>
+        <td><strong>${t.name}</strong><br>${assignLabel(t)} <span style="font-size:10px;color:var(--tx3)">${t.id}</span></td>
         <td>Tuần ${t.week}</td>
         <td><strong>${qcount}</strong> câu</td>
         <td><div class="btn-row">
@@ -1797,15 +1797,18 @@ async function importCSV(){
   reader.onload = async e => {
     try{
       const lines=e.target.result.split("\n").filter(l=>l.trim());
-      const newQs=[];
+      const newQs=[];const missing=new Set();
       for(const line of lines){
         const cols=parseCSVLine(line);
         if(cols.length<4)continue;
         const [topicId,type,prompt,answer,opt1,opt2,opt3,opt4,extra=""]=cols;
         if(!topicId||!type||!prompt||!answer)continue;
         const opts=[opt1,opt2,opt3,opt4].filter(Boolean);
-        newQs.push({id:"csv"+Date.now()+Math.random().toString(36).slice(2),topicId:topicId.trim(),type:type.trim(),prompt:prompt.trim(),answer:answer.trim(),opts,extra:extra.trim()});
+        const _tk=topicId.trim().toLowerCase();const _tp=getTopics().find(t=>t.id.toLowerCase()===_tk||(t.name||"").trim().toLowerCase()===_tk);
+        if(!_tp){missing.add(topicId.trim());continue;}
+        newQs.push({id:"csv"+Date.now()+Math.random().toString(36).slice(2),topicId:_tp.id,type:type.trim(),prompt:prompt.trim(),answer:answer.trim(),opts,extra:extra.trim()});
       }
+      if(missing.size)alert("Không tìm thấy chủ đề: "+[...missing].join(", ")+"\nHãy tạo chủ đề trước (tên phải khớp cột topic_id). Các dòng này đã bị bỏ qua.");
       if(!newQs.length){document.getElementById("csv-err").classList.add("on");return;}
       for(const q of newQs){
       
