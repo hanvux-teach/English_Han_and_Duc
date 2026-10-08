@@ -938,6 +938,27 @@ textarea.inp{resize:vertical;min-height:70px}
   </div>
 </div>
 
+<!-- ═══ MODAL: Import CSV vào test ═══ -->
+<div class="modal-bg" id="modal-tcsv">
+  <div class="modal">
+    <h3>Import câu hỏi vào bài test</h3>
+    <div class="csv-info">
+      Dùng được <strong>cùng file CSV</strong> như import câu hỏi chủ đề:<br>
+      <code>topic_id,type,prompt,answer,opt1,opt2,opt3,opt4,extra</code><br>
+      Cột <code>topic_id</code> sẽ được <strong>bỏ qua</strong> (có thể xoá cột này; khi đó dòng bắt đầu bằng <code>type</code>).<br>
+      Câu hỏi được thêm vào <strong>cuối</strong> bài test hiện tại.
+    </div>
+    <label class="lbl">Chọn file CSV</label>
+    <input type="file" accept=".csv,.txt" id="tcsv-file" class="inp">
+    <div id="tcsv-preview" style="font-size:12px;color:var(--tx2);margin-top:8px"></div>
+    <div class="err-msg" id="tcsv-err">Không đọc được file hoặc không có dòng hợp lệ!</div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeMod('modal-tcsv')">Hủy</button>
+      <button class="btn btn-pur" id="tcsv-btn" onclick="importTestCsv()">Import</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ MODAL: Attempt detail (teacher) ═══ -->
 <div class="modal-bg" id="modal-att">
   <div class="modal" style="max-width:680px">
@@ -4039,7 +4060,7 @@ function renderTmContent(){
   el.innerHTML=`<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px">
       <h2 style="font-size:15px;font-weight:600">Câu hỏi trong test (${flattenTest(qs).total} câu tính điểm)</h2>
-      <button class="btn btn-pur btn-sm" onclick="openQModal(null,'${TM.id}')">+ Thêm câu</button></div>
+      <div class="btn-row"><button class="btn btn-teal btn-sm" onclick="openTestCsvModal()">↑ Import CSV</button><button class="btn btn-pur btn-sm" onclick="openQModal(null,'${TM.id}')">+ Thêm câu</button></div></div>
     ${qs.length?`<div style="overflow-x:auto"><table class="qtable"><thead><tr><th>#</th><th>Dạng</th><th>Nội dung</th><th>Đáp án</th><th></th></tr></thead><tbody>${qs.map((q,i)=>{
       const g=isPassageType(q.type);
       return `<tr><td>${i+1}</td><td><span class="qtype-pill">${TL[q.type]||q.type}</span></td>
@@ -4048,6 +4069,47 @@ function renderTmContent(){
       <td><div class="btn-row"><button class="btn btn-sm" ${i===0?"disabled":""} onclick="moveTestQ('${q.id}',-1)">↑</button><button class="btn btn-sm" ${i===qs.length-1?"disabled":""} onclick="moveTestQ('${q.id}',1)">↓</button>
       <button class="btn btn-sm" onclick="openQModal('${q.id}','${TM.id}')">Sửa</button><button class="btn btn-sm btn-red" onclick="deleteTestQ('${q.id}')">Xóa</button></div></td></tr>`;}).join("")}</tbody></table></div>`
       :'<div class="empty">Chưa có câu hỏi. Bấm "+ Thêm câu". Muốn 1 audio nhiều câu hỏi → chọn dạng <strong>Listening Passage</strong>.</div>'}</div>`;
+}
+const CSV_TYPES=["mcq","fill","arrange","phonics","listen","listen-tf","listen-fill","tf","odd","img-mcq","read-img","listen-img","pic-mcq","mcq-multi","drag-fill","listen-multi","img-fill"];
+function openTestCsvModal(){
+  $id("tcsv-file").value="";$id("tcsv-preview").textContent="";$id("tcsv-err").classList.remove("on");
+  $id("tcsv-btn").disabled=false;openMod("modal-tcsv");
+}
+function importTestCsv(){
+  const file=$id("tcsv-file").files[0];const err=$id("tcsv-err");err.classList.remove("on");
+  if(!file||!TM.id){err.classList.add("on");return;}
+  const testId=TM.id;
+  const reader=new FileReader();
+  reader.onload=async e=>{
+    try{
+      let text=String(e.target.result).replace(/^\uFEFF/,"");
+      const lines=text.split(/\r?\n/).filter(l=>l.trim());
+      const items=[];
+      for(const line of lines){
+        let cols=parseCSVLine(line);
+        // có cột topic_id ở đầu thì bỏ đi
+        if(cols.length&&!CSV_TYPES.includes((cols[0]||"").trim().toLowerCase())&&CSV_TYPES.includes((cols[1]||"").trim().toLowerCase()))cols=cols.slice(1);
+        if(cols.length<3)continue;
+        const [type,prompt,answer,o1,o2,o3,o4,extra=""]=cols;
+        const ty=(type||"").trim().toLowerCase();
+        if(!CSV_TYPES.includes(ty)||!prompt||!answer)continue;
+        let ans=answer.trim();
+        if(ty==="drag-fill")ans=ans.split("|").join("\n");
+        items.push({type:ty,prompt:prompt.trim(),answer:ans,opts:[o1,o2,o3,o4].map(x=>(x||"").trim()).filter(Boolean),extra:(extra||"").trim()});
+      }
+      if(!items.length){err.classList.add("on");return;}
+      $id("tcsv-btn").disabled=true;
+      const base=Date.now();let n=0;
+      for(const it of items){
+        await window.fb.addDoc(window.fb.collection(window.db,"testQuestions"),
+          {id:"tq"+base+"_"+n,testId,order:base+n,type:it.type,prompt:it.prompt,answer:it.answer,opts:it.opts,extra:it.extra,audioUrl:"",anyOrder:false});
+        n++;$id("tcsv-preview").textContent="Đang import "+n+"/"+items.length+"…";
+      }
+      $id("tcsv-preview").textContent="✓ Đã import "+n+" câu hỏi vào bài test.";
+      setTimeout(()=>{closeMod("modal-tcsv");},1000);
+    }catch(ex){console.error(ex);fbErr(ex,"testQuestions");$id("tcsv-btn").disabled=false;}
+  };
+  reader.readAsText(file,"UTF-8");
 }
 async function moveTestQ(id,dir){
   const qs=getTestQs(TM.id);const i=qs.findIndex(q=>q.id===id);const j=i+dir;if(i<0||j<0||j>=qs.length)return;
