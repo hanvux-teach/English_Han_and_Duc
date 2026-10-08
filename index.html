@@ -928,7 +928,11 @@ textarea.inp{resize:vertical;min-height:70px}
       <option value="never">Không hiện đáp án — chỉ hiện điểm</option>
     </select>
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-bottom:6px"><input type="checkbox" id="mtt-pub" style="width:auto;margin:0" checked> Hiển thị cho học sinh (làm ở nhà được)</label>
-    <p style="font-size:11px;color:var(--tx3)">Ở nhà học sinh làm không tính giờ và luôn thấy đáp án ngay sau mỗi câu.</p>
+    <label class="lbl">Khi học sinh làm lại / luyện tập ở nhà (không tính giờ)</label>
+    <select class="inp" id="mtt-home">
+      <option value="same">Giống cài đặt hiện đáp án ở trên</option>
+      <option value="instant">Luôn hiện đúng/sai ngay sau mỗi câu (để tự học)</option>
+    </select>
     <div id="mtt-assign"></div>
     <div class="err-msg" id="mtt-err">Vui lòng nhập tên bài test!</div>
     <div class="modal-foot">
@@ -1822,12 +1826,13 @@ async function importCSV(){
       for(const line of lines){
         const cols=parseCSVLine(line);
         if(cols.length<4)continue;
-        const [topicId,type,prompt,answer,opt1,opt2,opt3,opt4,extra=""]=cols;
+        const [topicId,type,prompt,answer,opt1,opt2,opt3,opt4,extra="",audioUrl=""]=cols;
         if(!topicId||!type||!prompt||!answer)continue;
-        const opts=[opt1,opt2,opt3,opt4].filter(Boolean);
+        const opts=[opt1,opt2,opt3,opt4].filter(Boolean).flatMap(x=>x.split("|")).map(x=>x.trim()).filter(Boolean);
+        const ty0=type.trim();const ans0=ty0==="drag-fill"?answer.trim().split("|").join("\n"):answer.trim();
         const _tk=topicId.trim().toLowerCase();const _tp=getTopics().find(t=>t.id.toLowerCase()===_tk||(t.name||"").trim().toLowerCase()===_tk);
         if(!_tp){missing.add(topicId.trim());continue;}
-        newQs.push({id:"csv"+Date.now()+Math.random().toString(36).slice(2),topicId:_tp.id,type:type.trim(),prompt:prompt.trim(),answer:answer.trim(),opts,extra:extra.trim()});
+        newQs.push({id:"csv"+Date.now()+Math.random().toString(36).slice(2),topicId:_tp.id,type:ty0,prompt:prompt.trim(),answer:ans0,opts,extra:extra.trim(),audioUrl:(audioUrl||"").trim()});
       }
       if(missing.size)alert("Không tìm thấy chủ đề: "+[...missing].join(", ")+"\nHãy tạo chủ đề trước (tên phải khớp cột topic_id). Các dòng này đã bị bỏ qua.");
       if(!newQs.length){document.getElementById("csv-err").classList.add("on");return;}
@@ -3440,9 +3445,12 @@ function tLoadDrafts(id){try{return JSON.parse(localStorage.getItem("ep_draft_"+
 function tItemsDone(){return T.flat.items.filter(it=>T.answers[it.key]).length;}
 
 // Có hiện đúng/sai cho câu đã nộp không?
+function tShowMode(test,att){
+  if(att.mode==="practice"&&test.homeShow==="instant")return "instant";
+  return test.showAnswers||"end";
+}
 function tReveal(){
-  if(T.att.mode==="practice")return true;
-  const sa=T.test.showAnswers||"end";
+  const sa=tShowMode(T.test,T.att);
   if(sa==="instant")return true;
   if(sa==="end")return T.att.status==="submitted";
   return false;
@@ -3850,7 +3858,7 @@ function tShowResult(){
   $id("t-title").textContent=test.title;$id("t-timer").style.display="none";
   $id("t-head").style.display="none";
   const st=attemptStats({answers:T.answers||att.answers||{}},T.flat);
-  const showList=att.mode==="practice"||(test.showAnswers||"end")!=="never";
+  const showList=tShowMode(test,att)!=="never";
   const stars=st.pct>=90?"⭐⭐⭐":st.pct>=70?"⭐⭐":"⭐";
   const msg=st.pct>=90?"Xuất sắc!":st.pct>=70?"Tốt lắm!":st.pct>=50?"Cần ôn thêm một chút!":"Xem lại và thử lại nhé!";
   const canRetry=!tLive(test);
@@ -3894,7 +3902,7 @@ function openTestModal(id){
   const t=id?getTests().find(x=>x.id===id):null;
   $id("mtt-id").value=id||"";$id("modal-test-title").textContent=id?"Sửa thông tin test":"Tạo test mới";
   $id("mtt-title").value=t?t.title:"";$id("mtt-lesson").value=t?t.lesson||"":"";
-  $id("mtt-min").value=t?t.durationMin||30:30;$id("mtt-show").value=t?t.showAnswers||"end":"end";
+  $id("mtt-min").value=t?t.durationMin||30:30;$id("mtt-show").value=t?t.showAnswers||"end":"end";$id("mtt-home").value=t&&t.homeShow==="instant"?"instant":"same";
   $id("mtt-pub").checked=t?!!t.published:true;renderAssignBox("mtt-assign",t?t.assignedTo:[]);$id("mtt-err").classList.remove("on");
   openMod("modal-test");
 }
@@ -3906,7 +3914,7 @@ async function saveTestInner(){
   const id=$id("mtt-id").value;const title=$id("mtt-title").value.trim();
   if(!title){$id("mtt-err").classList.add("on");return;}
   const data={title,lesson:$id("mtt-lesson").value.trim(),durationMin:Math.max(1,parseInt($id("mtt-min").value)||30),
-    showAnswers:$id("mtt-show").value,published:$id("mtt-pub").checked,assignedTo:readAssignBox("mtt-assign")};
+    showAnswers:$id("mtt-show").value,homeShow:$id("mtt-home").value,published:$id("mtt-pub").checked,assignedTo:readAssignBox("mtt-assign")};
   try{
     if(id){
       const t=getTests().find(x=>x.id===id);
@@ -4090,19 +4098,19 @@ function importTestCsv(){
         // có cột topic_id ở đầu thì bỏ đi
         if(cols.length&&!CSV_TYPES.includes((cols[0]||"").trim().toLowerCase())&&CSV_TYPES.includes((cols[1]||"").trim().toLowerCase()))cols=cols.slice(1);
         if(cols.length<3)continue;
-        const [type,prompt,answer,o1,o2,o3,o4,extra=""]=cols;
+        const [type,prompt,answer,o1,o2,o3,o4,extra="",audio=""]=cols;
         const ty=(type||"").trim().toLowerCase();
         if(!CSV_TYPES.includes(ty)||!prompt||!answer)continue;
         let ans=answer.trim();
         if(ty==="drag-fill")ans=ans.split("|").join("\n");
-        items.push({type:ty,prompt:prompt.trim(),answer:ans,opts:[o1,o2,o3,o4].map(x=>(x||"").trim()).filter(Boolean),extra:(extra||"").trim()});
+        items.push({type:ty,prompt:prompt.trim(),answer:ans,opts:[o1,o2,o3,o4].map(x=>(x||"").trim()).filter(Boolean).flatMap(x=>x.split("|")).map(x=>x.trim()).filter(Boolean),extra:(extra||"").trim(),audioUrl:(audio||"").trim()});
       }
       if(!items.length){err.classList.add("on");return;}
       $id("tcsv-btn").disabled=true;
       const base=Date.now();let n=0;
       for(const it of items){
         await window.fb.addDoc(window.fb.collection(window.db,"testQuestions"),
-          {id:"tq"+base+"_"+n,testId,order:base+n,type:it.type,prompt:it.prompt,answer:it.answer,opts:it.opts,extra:it.extra,audioUrl:"",anyOrder:false});
+          {id:"tq"+base+"_"+n,testId,order:base+n,type:it.type,prompt:it.prompt,answer:it.answer,opts:it.opts,extra:it.extra,audioUrl:it.audioUrl||"",anyOrder:false});
         n++;$id("tcsv-preview").textContent="Đang import "+n+"/"+items.length+"…";
       }
       $id("tcsv-preview").textContent="✓ Đã import "+n+" câu hỏi vào bài test.";
