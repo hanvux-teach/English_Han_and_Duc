@@ -724,6 +724,18 @@ body.exammode .vf-blank.ok,body.exammode .vf-blank.bad{background:var(--pur-l)!i
       </div>
       <div id="admin-scores-wrap"></div>
     </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:8px">
+        <h2 style="font-size:15px;font-weight:600">📝 Điểm Test/Quiz (làm ở nhà &amp; trong giờ)</h2>
+        <div class="btn-row">
+          <select class="inp" id="ts-filter-student" onchange="renderTestScoreSummary()" style="margin-bottom:0;max-width:160px"><option value="">Tất cả học sinh</option></select>
+          <select class="inp" id="ts-filter-test" onchange="renderTestScoreSummary()" style="margin-bottom:0;max-width:200px"><option value="">Tất cả bài test</option></select>
+          <select class="inp" id="ts-filter-mode" onchange="renderTestScoreSummary()" style="margin-bottom:0;max-width:150px"><option value="">Mọi hình thức</option><option value="practice">Ở nhà</option><option value="live">Trong giờ</option></select>
+        </div>
+      </div>
+      <p style="font-size:12px;color:var(--tx3);margin-bottom:12px">Chỉ tính các lượt đã nộp. "Cao nhất / TB" tính trên các lượt đã lọc. Bấm vào dòng để xem từng lượt làm.</p>
+      <div id="ts-wrap" style="overflow-x:auto"></div>
+    </div>
   </div>
 
   <!-- Admin: Exams (Thi thử) -->
@@ -1427,6 +1439,7 @@ async function unlockAdmin(){
   aTab("topics");
 }
 function exitAdmin(){
+  if(typeof TSW!=="undefined"&&TSW.unsub){TSW.unsub();TSW.unsub=null;}
   if(typeof TM!=="undefined"&&TM.id)closeTestDetail();
   window.auth.signOut().catch(e=>console.error("Sign out error:",e));
   showScr("s-login");
@@ -2307,6 +2320,7 @@ function resetAllScores(){if(!confirm("Xóa toàn bộ điểm số?"))return;sa
 
 // ══════ ADMIN: SCORES ══════
 function renderAdminScores(){
+  startTestScoreWatch();
   const scores=window.CLOUD_SCORES||[];
   const students=getStudents();
   const topics=getTopics();
@@ -4929,6 +4943,56 @@ function exportTestCsv(){
   const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
   const link=document.createElement("a");link.href=url;link.download=(t.title||"test").replace(/[^\w\-]+/g,"_")+".csv";link.click();
   setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
+// ── Tổng hợp điểm Test/Quiz theo học sinh (gồm cả làm ở nhà) ──
+let TSW={unsub:null,att:[]};
+function startTestScoreWatch(){
+  if(TSW.unsub)return;
+  TSW.unsub=window.db.collection("testAttempts").where("status","==","submitted").onSnapshot(snap=>{
+    TSW.att=snap.docs.map(d=>({id:d.id,...d.data()}));
+    if($id("at-scores")&&$id("at-scores").classList.contains("on"))renderTestScoreSummary();
+  },err=>{console.error("testScore watch:",err);TSW.unsub=null;window.fbRulesAlert&&window.fbRulesAlert(err,"testAttempts");});
+}
+function fillTsFilters(){
+  const st=$id("ts-filter-student"),te=$id("ts-filter-test");if(!st||!te)return;
+  if(st.options.length<=1)getStudents().slice().sort((a,b)=>a.name.localeCompare(b.name)).forEach(s=>{const o=document.createElement("option");o.value=s.name;o.textContent=s.name;st.appendChild(o);});
+  const have=new Set([...te.options].map(o=>o.value));
+  getTests().forEach(t=>{if(!have.has(t.id)){const o=document.createElement("option");o.value=t.id;o.textContent=t.title;te.appendChild(o);}});
+}
+function renderTestScoreSummary(){
+  const wrap=$id("ts-wrap");if(!wrap)return;
+  fillTsFilters();
+  const fs=$id("ts-filter-student").value,ft=$id("ts-filter-test").value,fm=$id("ts-filter-mode").value;
+  let rows=TSW.att.filter(a=>(!fs||a.student===fs)&&(!ft||a.testId===ft)&&(!fm||a.mode===fm));
+  if(!rows.length){wrap.innerHTML='<div class="empty">Chưa có lượt làm nào.</div>';return;}
+  const groups={};
+  rows.forEach(a=>{
+    const k=a.student+"||"+a.testId;
+    const g=groups[k]=groups[k]||{student:a.student,testId:a.testId,list:[]};
+    g.list.push(a);
+  });
+  const tests=getTests();
+  const list=Object.values(groups).sort((x,y)=>x.student.localeCompare(y.student)||(((tests.find(t=>t.id===x.testId)||{}).title||"").localeCompare((tests.find(t=>t.id===y.testId)||{}).title||"")));
+  const col=p=>p>=80?"var(--teal)":p>=50?"var(--amb)":"var(--red)";
+  wrap.innerHTML=`<table class="qtable"><thead><tr><th>Học sinh</th><th>Bài test</th><th style="text-align:center">Ở nhà</th><th style="text-align:center">Trong giờ</th><th style="text-align:center">Cao nhất</th><th style="text-align:center">TB</th><th style="text-align:center">Lần cuối</th><th>Gần nhất</th></tr></thead><tbody>${list.map(g=>{
+    const t=tests.find(x=>x.id===g.testId);
+    const sorted=g.list.slice().sort((a,b)=>tsMs(b.submittedAt)-tsMs(a.submittedAt));
+    const pcts=g.list.map(a=>a.pct||0);
+    const best=Math.max(...pcts),avg=Math.round(pcts.reduce((s,x)=>s+x,0)/pcts.length),last=sorted[0].pct||0;
+    const home=g.list.filter(a=>a.mode==="practice").length,live=g.list.filter(a=>a.mode==="live").length;
+    return `<tr class="tm-row-click" onclick="showTsDetail(${escJs(g.student)},${escJs(g.testId)})"><td><strong>${esc(g.student)}</strong></td><td>${t?esc(t.title):"<i style='color:var(--tx3)'>(test đã xóa)</i>"}</td>
+      <td style="text-align:center">${home}</td><td style="text-align:center">${live}</td>
+      <td style="text-align:center;font-weight:700;color:${col(best)}">${best}%</td><td style="text-align:center;color:var(--tx2)">${avg}%</td><td style="text-align:center;color:var(--tx3)">${last}%</td>
+      <td style="color:var(--tx3);white-space:nowrap">${ago(tsMs(sorted[0].submittedAt))}</td></tr>`;}).join("")}</tbody></table>`;
+}
+function showTsDetail(student,testId){
+  const t=getTests().find(x=>x.id===testId);
+  const list=TSW.att.filter(a=>a.student===student&&a.testId===testId).sort((a,b)=>tsMs(b.submittedAt)-tsMs(a.submittedAt));
+  const fmt=ms=>ms?new Date(ms).toLocaleString("vi-VN"):"—";
+  $id("modal-att-body").innerHTML=`<h3 style="margin-bottom:8px">${esc(student)} — ${t?esc(t.title):""}</h3>
+    <table class="qtable"><thead><tr><th>Nộp lúc</th><th>Hình thức</th><th style="text-align:center">Đúng</th><th style="text-align:center">Điểm</th><th style="text-align:center">Rời tab</th></tr></thead><tbody>${list.map(a=>`<tr><td>${fmt(tsMs(a.submittedAt))}</td><td>${a.mode==="live"?"Trong giờ":"Ở nhà"}${a.auto?" (tự động)":""}</td><td style="text-align:center">${a.correct||0}/${a.total||0}</td><td style="text-align:center;font-weight:700">${a.pct||0}%</td><td style="text-align:center">${a.tabSwitches||0}</td></tr>`).join("")}</tbody></table>`;
+  openMod("modal-att");
 }
 
 // Hook từ Firebase listeners
